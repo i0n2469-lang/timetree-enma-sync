@@ -1,0 +1,59 @@
+name: Update TimeTree ICS
+
+on:
+  schedule:
+    # UTCで3時間おき。毎時0分はGitHub Actionsが混みやすいため17分にずらす。
+    - cron: '17 */3 * * *'
+    # Publicリポジトリで60日間アクティビティがないと定期実行が停止するため、
+    # 月1回だけ「変更なし」でも空コミットを作るための実行。
+    - cron: '41 6 1 * *'
+  workflow_dispatch:   # Actions画面から手動実行できるようにする
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install timetree-exporter
+        # 公開カレンダー対応が入った0.8.0に固定。将来の更新で急に挙動が変わるのを避ける。
+        run: pip install 'timetree-exporter==0.8.0'
+
+      - name: Export public calendar to ICS
+        run: |
+          mkdir -p public
+          timetree-exporter --public-calendar -c enma -o public/enma.ics
+
+      - name: Commit and push
+        env:
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/enma.ics
+
+          # TimeTree側に変更があれば、その変更を普通に保存する。
+          if ! git diff --staged --quiet; then
+            git commit -m "Update enma.ics ($(date -u +'%Y-%m-%dT%H:%M:%SZ'))"
+            git push
+            exit 0
+          fi
+
+          # 毎月1日のkeepalive実行だけは、ICSに変更がなくても空コミットを作る。
+          # Publicリポジトリのscheduled workflowが60日無活動で停止するのを避けるため。
+          if [ "$EVENT_SCHEDULE" = "41 6 1 * *" ]; then
+            git commit --allow-empty -m "Keep scheduled sync active ($(date -u +'%Y-%m'))"
+            git push
+          else
+            echo "No calendar changes. Nothing to commit."
+          fi
